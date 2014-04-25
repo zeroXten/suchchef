@@ -12,6 +12,11 @@ Uses
 * test-kitchen (from CDK)
 * minitest-handler
 
+Installation
+============
+
+Clone the repo and copy the `suchchef` script to somewhere in your PATH
+
 Usage
 =====
 
