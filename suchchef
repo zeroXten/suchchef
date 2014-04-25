@@ -1,0 +1,186 @@
+#!/bin/bash
+
+set -e
+
+print_header()
+{
+  local header="$1"
+  local light_purple=13
+  echo "$(tput setaf $light_purple)"
+  echo "################################################################################"
+  echo " $header"
+  echo "################################################################################"
+  echo "$(tput sgr0)"
+}
+
+warn()
+{
+  local warning="$1"
+  local orange="3"
+
+  echo "$(tput setaf $orange)"
+  echo " WARNING: $warning"
+  echo "$(tput sgr0)"
+}
+
+error()
+{
+  local error="$1"
+  local red=1
+
+  echo "$(tput setaf $red)"
+  echo " ERROR: $error"
+  echo "$(tput sgr0)"
+  exit 1
+}
+
+print_done()
+{
+  local message="$1"
+  local green=2
+  echo "$(tput setaf $green)"
+  echo " $message$(tput sgr0)"
+}
+
+name=$1
+fresh_install=
+
+if [[ -z $name ]]; then
+  echo "Usage: $(basename $0) COOKBOOK"
+  exit 1
+fi
+
+CHEF=$(which chef)
+if [[ $? != 0 ]]; then
+  echo "Please install the Chef Development Kit from http://www.getchef.com/downloads/chef-dk/mac/"
+  exit 1
+fi
+
+clang -v 2>&1 | grep -q 'Apple LLVM version 5.1'
+if [[ $? == 0 ]] && [[ -z $ARCHFLAGS ]]; then
+  echo "XCode 5.1 found. Adding CFLAGS and ARCHFLAGS fix to .bash_profile"
+  cat <<EOF >> ~/.bash_profile
+export CFLAGS=""
+export ARCHFLAGS=-Wno-error=unused-command-line-argument-hard-error-in-future
+EOF
+  source ~/.bash_profile
+fi
+
+BUNDLER=$(which bundler)
+if [[ $? != 0 ]]; then
+  print_header "Installing bundler (uses sudo)"
+  sudo gem install bundler
+fi
+
+print_header "Using chef to create cookbook"
+
+if [ -d "$name" ]; then
+  print_done "Directory '$name' already exists, skipping."
+else
+  fresh_install=1
+  chef generate cookbook $name
+fi
+
+pushd "$name" >/dev/null 2>&1
+
+if [ $fresh_install ]; then
+  print_header "Installing required gems (uses sudo)"
+  cat <<-EOF > Gemfile
+source 'https://rubygems.org'
+
+gem "berkshelf"
+gem 'kitchen-vagrant'
+#gem 'rspec'
+#gem 'leibniz', :git => 'git://github.com/zeroXten/leibniz.git', :branch => 'custom_boxes'
+#gem 'rubocop'
+#gem 'foodcritic'
+#gem 'serverspec'
+#gem 'chefspec'
+EOF
+
+  sudo bundle install
+else
+  print_header "Updating gems (uses sudo)"
+  sudo bundle update
+fi
+print_done "Done"
+
+if [ $fresh_install ]; then
+  print_header "Configuring rubocop"
+  cat <<-EOF > .rubocop.yml
+LineLength:
+  Max: 119
+TrailingWhitespace:
+  Enabled: false
+TrailingBlankLines:
+  Enabled: false
+EOF
+fi
+
+if [ $fresh_install ]; then
+  print_header "Configuring test-kitchen"
+  sed -i '' $'s/\-\ recipe\[bar\:\:default\]/&\\\n      \- recipe\[minitest-handler\]/' .kitchen.yml
+  sed -i '' "s/bar/${name}/" .kitchen.yml
+  print_done "Done"
+fi
+
+print_header "Configuring minitest"
+
+if [ $fresh_install ]; then
+  cat <<-EOF >> "Berksfile"
+group :dev, :test do
+  cookbook 'minitest-handler'
+end
+EOF
+fi
+
+if [ ! -d "files/default/test" ]; then
+  mkdir -p "files/default/test"
+fi
+
+if [ $fresh_install ]; then
+  cat <<-EOF > "files/default/test/default_test.rb"
+require 'chef/mixin/shell_out'
+include Chef::Mixin::ShellOut
+
+# Documentation can be found here:
+#  https://github.com/seattlerb/minitest
+#  http://docs.seattlerb.org/minitest/
+
+# Basic tests
+class TestBasics < MiniTest::Chef::TestCase
+  def test_true
+    cmd = shell_out 'true'
+    assert_equal(cmd.exitstatus, 0)
+  end
+
+  def test_false
+    cmd = shell_out 'false'
+    assert_equal(cmd.exitstatus, 1)
+  end
+end
+EOF
+  print_done "Done"
+fi
+
+print_header "Adding apt to recipe"
+if [ $fresh_install ]; then
+  cat <<EOF >> metadata.rb
+depends 'apt'
+EOF
+
+  cat <<EOF >> recipes/default.rb
+include_recipe 'apt'
+EOF
+fi
+print_done "Done"
+
+print_header "Running berks install"
+berks install
+print_done "Done"
+
+popd > /dev/null 2>&1
+
+print_done "All done finished. Please run kitchen test."
+
+exit 0
