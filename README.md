@@ -27,4 +27,5 @@ This will create a cookbook:
 You can then go into the cookbook and run the basic tests provided:
 
     $ cd COOKBOOK
+    $ berks install
     $ kitchen test
